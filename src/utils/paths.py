@@ -9,7 +9,7 @@ def app_root() -> Path:
 
 ROOT_DIR = app_root()
 DATA_DIR = ROOT_DIR / "data"
-CUSTOM_DIR = ROOT_DIR / "custom"
+CUSTOM_DIR = DATA_DIR / "custom"
 LIBS_DIR = ROOT_DIR / "libs"
 
 def data_path(*parts: str) -> Path:
