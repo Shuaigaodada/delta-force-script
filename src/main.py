@@ -66,6 +66,22 @@ def main() -> None:
     load_accounts()
     logger.info(f"共加载到 {len(ACCOUNTS)} 个账户")
     
+    
+    # info = workflow.read_info()
+    # print(info)
+    # imgs = [workflow.load_template(str(custom_path(f"{i}.png"))) for i in range(1, 5)]
+    # s=.3
+    # for index, status in enumerate(info):
+    #     if not status:
+    #         workflow.open_object(index)
+    #         time.sleep(s)
+    #         workflow.find_object(imgs[index])
+    #         time.sleep(s)
+    #         workflow.make_object()
+    #         time.sleep(s)
+    #         workflow.quit_object()
+    #         time.sleep(s)
+    
     for usr_id in ACCOUNTS:
         logger.info(f"正在处理账户: {usr_id}")
         try:

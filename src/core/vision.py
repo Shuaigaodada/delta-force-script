@@ -1,19 +1,51 @@
 from __future__ import annotations
+import os
+import sys
+from pathlib import Path
 from typing import Optional
 import cv2
 import numpy as np
 import pytesseract
 
-pytesseract.pytesseract.tesseract_cmd = r"D:\programing\delta-force-script\llibs\tesseract-ocr\tesseract.exe"
+
+def _app_root() -> Path:
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parents[2]
+
+
+APP_ROOT = _app_root()
+LIBS_DIR = APP_ROOT / "libs"
+TESSERACT_DIR = LIBS_DIR / "tesseract-ocr"
+TESSERACT_EXE = TESSERACT_DIR / "tesseract.exe"
+TESSDATA_DIR = TESSERACT_DIR / "tessdata"
+
+
+def _configure_tesseract() -> None:
+    if TESSERACT_EXE.exists():
+        pytesseract.pytesseract.tesseract_cmd = str(TESSERACT_EXE)
+
+    if TESSDATA_DIR.exists():
+        os.environ.setdefault("TESSDATA_PREFIX", str(TESSDATA_DIR))
+
+
+_configure_tesseract()
 
 def image_read(path: str) -> Optional[np.ndarray]:
     """
-    从文件读取图像，返回 BGR 格式的 numpy 数组
+    从文件读取图像，返回 BGR 格式的 numpy 数组。
+    使用 np.fromfile + cv2.imdecode，兼容 Windows 中文路径。
     """
-    img = cv2.imread(path)
-    if img is None:
+    try:
+        data = np.fromfile(str(path), dtype=np.uint8)
+        if data.size == 0:
+            return None
+        img = cv2.imdecode(data, cv2.IMREAD_COLOR)
+        if img is None:
+            return None
+        return img
+    except Exception:
         return None
-    return img
 
 
 def find_template(
@@ -338,3 +370,148 @@ def match_score_edge(
     result = cv2.matchTemplate(screen_edge, template_edge, cv2.TM_CCOEFF_NORMED)
     _, max_val, _, _ = cv2.minMaxLoc(result)
     return float(max_val)
+
+def find_green_confirm_button(
+    screen: np.ndarray,
+    origin: tuple[int, int] = (0, 0),
+    roi: Optional[tuple[int, int, int, int]] = None,
+    hsv_lower: tuple[int, int, int] = (85, 8, 45),
+    hsv_upper: tuple[int, int, int] = (125, 255, 255),
+    min_area: int = 2500,
+    min_ratio: float = 2.2,
+) -> tuple[
+    bool,
+    Optional[tuple[int, int]],
+    Optional[tuple[int, int]],
+    Optional[tuple[int, int]],
+    dict,
+]:
+    """
+    在 screen 或指定 roi 内查找底部绿色/青绿色确认按钮（不依赖模板，不依赖金额）。
+
+    返回:
+        found,
+        center,
+        top_left,
+        bottom_right,
+        debug_info
+
+    debug_info 字段示例:
+        {
+            "roi": (rx1, ry1, rx2, ry2),
+            "roi_size": (width, height),
+            "mask_nonzero": 1234,
+            "mask_ratio": 0.0123,
+            "contour_count": 5,
+            "candidate_count": 1,
+            "rejected_small_area": 3,
+            "rejected_bad_ratio": 1,
+            "best_rect_local": (x, y, w, h),
+            "best_score": 9876.5,
+            "reason": "ok",
+        }
+    """
+    sh, sw = screen.shape[:2]
+
+    if roi is None:
+        rx1, ry1, rx2, ry2 = 0, 0, sw, sh
+    else:
+        rx1, ry1, rx2, ry2 = roi
+        rx1 = max(0, min(sw, rx1))
+        rx2 = max(0, min(sw, rx2))
+        ry1 = max(0, min(sh, ry1))
+        ry2 = max(0, min(sh, ry2))
+
+    debug_info = {
+        "roi": (rx1, ry1, rx2, ry2),
+        "roi_size": (max(rx2 - rx1, 0), max(ry2 - ry1, 0)),
+        "mask_nonzero": 0,
+        "mask_ratio": 0.0,
+        "contour_count": 0,
+        "candidate_count": 0,
+        "rejected_small_area": 0,
+        "rejected_bad_ratio": 0,
+        "best_rect_local": None,
+        "best_score": None,
+        "reason": "",
+    }
+
+    if rx2 <= rx1 or ry2 <= ry1:
+        debug_info["reason"] = "invalid_roi"
+        return False, None, None, None, debug_info
+
+    crop = screen[ry1:ry2, rx1:rx2]
+    if crop.size == 0:
+        debug_info["reason"] = "empty_crop"
+        return False, None, None, None, debug_info
+
+    hsv = cv2.cvtColor(crop, cv2.COLOR_BGR2HSV)
+
+    lower = np.array(hsv_lower, dtype=np.uint8)
+    upper = np.array(hsv_upper, dtype=np.uint8)
+    mask = cv2.inRange(hsv, lower, upper)
+
+    kernel_open = np.ones((3, 3), np.uint8)
+    kernel_close = np.ones((7, 7), np.uint8)
+    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel_open)
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel_close)
+
+    nonzero = int(cv2.countNonZero(mask))
+    total = mask.shape[0] * mask.shape[1]
+    debug_info["mask_nonzero"] = nonzero
+    debug_info["mask_ratio"] = float(nonzero / total) if total > 0 else 0.0
+
+    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    debug_info["contour_count"] = len(contours)
+
+    best_rect = None
+    best_score = -1.0
+
+    for cnt in contours:
+        x, y, w, h = cv2.boundingRect(cnt)
+        area = w * h
+        ratio = w / max(h, 1)
+
+        if area < min_area:
+            debug_info["rejected_small_area"] += 1
+            continue
+
+        if ratio < min_ratio:
+            debug_info["rejected_bad_ratio"] += 1
+            continue
+
+        debug_info["candidate_count"] += 1
+
+        cy = y + h / 2
+        score = area + ratio * 800 + cy * 2
+
+        if score > best_score:
+            best_score = score
+            best_rect = (x, y, w, h)
+
+    if best_rect is None:
+        if debug_info["mask_nonzero"] == 0:
+            debug_info["reason"] = "no_color_match"
+        elif debug_info["contour_count"] == 0:
+            debug_info["reason"] = "no_contour"
+        elif debug_info["candidate_count"] == 0:
+            if debug_info["rejected_small_area"] > 0 and debug_info["rejected_bad_ratio"] == 0:
+                debug_info["reason"] = "all_rejected_small_area"
+            elif debug_info["rejected_bad_ratio"] > 0 and debug_info["rejected_small_area"] == 0:
+                debug_info["reason"] = "all_rejected_bad_ratio"
+            else:
+                debug_info["reason"] = "all_rejected_mixed"
+        else:
+            debug_info["reason"] = "no_best_rect"
+        return False, None, None, None, debug_info
+
+    x, y, w, h = best_rect
+    debug_info["best_rect_local"] = best_rect
+    debug_info["best_score"] = float(best_score)
+    debug_info["reason"] = "ok"
+
+    top_left = (origin[0] + rx1 + x, origin[1] + ry1 + y)
+    bottom_right = (top_left[0] + w, top_left[1] + h)
+    center = box_center(top_left, bottom_right)
+
+    return True, center, top_left, bottom_right, debug_info

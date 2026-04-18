@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import time
 import pathlib
+import sys
 import numpy as np
 from typing import Optional
 
@@ -11,10 +12,17 @@ from src.core import vision
 from src.core import capture
 from src.core import processes
 from src.utils.loggers import logger
-from src.utils.paths import data_path
 
-ACCOUNT_FILE = data_path("accounts.json")
-TEMPLATE_DIR = data_path("templates", "delta_force")
+def _app_root() -> pathlib.Path:
+    if getattr(sys, "frozen", False):
+        return pathlib.Path(sys.executable).resolve().parent
+    return pathlib.Path(__file__).resolve().parents[2]
+
+
+APP_ROOT = _app_root()
+DATA_DIR = APP_ROOT / "data"
+TEMPLATE_DIR = DATA_DIR / "templates" / "delta_force"
+ACCOUNT_FILE = DATA_DIR / "accounts.json"
 
 
 launcher_pid = None
@@ -34,7 +42,7 @@ def read_all_accounts() -> list[dict]:
         return accounts
 
     try:
-        with open(ACCOUNT_FILE, "r", encoding="utf-8") as f:
+        with ACCOUNT_FILE.open("r", encoding="utf-8") as f:
             accounts = json.load(f)
     except FileNotFoundError:
         accounts = []
@@ -358,8 +366,8 @@ def load_template(template_name: str) -> Optional[np.ndarray]:
     """
     加载模板图片
     """
-    template_path = str(pathlib.Path(TEMPLATE_DIR) / template_name)
-    template = vision.image_read(template_path)
+    template_path = TEMPLATE_DIR / template_name
+    template = vision.image_read(str(template_path))
     if template is None:
         logger.error(f"未找到模板图片: {template_path}")
         return None
@@ -369,6 +377,8 @@ def login_account(usr_id: str, retry_interval: float = 0.5) -> bool:
     """
     切换账号
     """
+    global launcher_pid
+    launcher_pid = None
     delta_force = available_delta_force_window(retry_interval=retry_interval)
     delta_force_pid = delta_force["pid"]
     logger.info(f"账号 ID: {usr_id}")
@@ -384,16 +394,10 @@ def login_account(usr_id: str, retry_interval: float = 0.5) -> bool:
     TEMPLATE_CONFIRM_BTN = load_template("confirm_btn.png")
     TEMPLATE_START_GAME = load_template("start_game.png")
     
-    retry = 0
     while True:
-        if retry >= 5:
-            global launcher_pid
-            launcher_pid = None
-            return login_account(usr_id, retry_interval=retry_interval)
         screen, region, hwnd = _capture_screen(delta_force_pid, retry_interval, warn="无法截取 三角洲行动 窗口，可能窗口未完全加载或被遮挡")
         if screen is None or region is None:
             logger.warning("无法截取 三角洲行动 窗口，可能窗口未完全加载或被遮挡，重试中...")
-            retry += 1
             continue
         
         found, _, _, _ = vision.find_template(screen, TEMPLATE_START_GAME, threshold=0.7, origin=(region["left"], region["top"]))
@@ -534,8 +538,8 @@ def login_account(usr_id: str, retry_interval: float = 0.5) -> bool:
             break
         break
     
-    template_login_btn_path = str(pathlib.Path(TEMPLATE_DIR) / "login_btn.png")
-    template_login_btn = vision.image_read(template_login_btn_path)
+    template_login_btn_path = TEMPLATE_DIR / "login_btn.png"
+    template_login_btn = vision.image_read(str(template_login_btn_path))
     if template_login_btn is None:
         logger.error(f"未找到 登录按钮模板图片: {template_login_btn_path}")
         return False
@@ -801,7 +805,8 @@ def start_game():
     pid = check_start()
     activate_delta_force_client(pid)
     
-    TEMPLATE_FENHUO = load_template("fenhuo.png")
+    TEMPLATE_FENGHUO1 = load_template("fenghuo1.png")
+    TEMPLATE_FENGHUO2 = load_template("fenghuo2.png")
     TEMPLATE_JOIN_GAME = load_template("join_game.png")
     TEMPLATE_CONTINUE = load_template("continue.png")
     TEMPLATE_TAB_CONTINUE = load_template("tab_continue.png")
@@ -813,15 +818,19 @@ def start_game():
             logger.error("无法截取 三角洲行动 窗口，可能窗口未完全加载或被遮挡")
             continue
         origin = (region["left"], region["top"])
-        found, score, top_left, bottom_right = vision.find_template_edge(
+        found, score, top_left, bottom_right = vision.find_template(
             screen,
-            TEMPLATE_FENHUO,
-            threshold=0.65,
-            origin=origin,
-            blur_ksize=3,
-            canny_low=60,
-            canny_high=140,
+            TEMPLATE_FENGHUO1,
+            threshold=0.75,
+            origin=origin
         )
+        feng2_found, feng2_score, feng2_top_left, feng2_bottom_right = vision.find_template(
+            screen,
+            TEMPLATE_FENGHUO2,
+            threshold=0.75,
+            origin=origin
+        )
+        
         logger.info(
             f"主页面检测: found={found}, score={score:.4f}, "
             f"top_left={top_left}, bottom_right={bottom_right}"
@@ -837,10 +846,17 @@ def start_game():
             time.sleep(0.5)
             input.click(click_x, click_y)
             break
-        else:
-            logger.info("未检测到主页面，继续等待...")
-            activate_delta_force_client(pid)
-            time.sleep(1.0)
+        if feng2_found:
+            logger.info("检测到烽火主页面2，准备点击")
+            click_x, click_y = vision.box_center(
+                feng2_top_left,
+                feng2_bottom_right,
+                offset=(0, 0),
+            )
+            logger.info(f"准备点击主页面2，绝对坐标=({click_x}, {click_y})")
+            time.sleep(0.5)
+            input.click(click_x, click_y)
+            break
     time.sleep(2)
     while True:
         screen, region, hwnd = capture.window_by_pid(pid)
@@ -927,7 +943,7 @@ def open_teqingchu():
         found, score, top_left, bottom_right = vision.find_template(
             screen,
             TEMPLATE_TEQINGCHU,
-            threshold=0.8,
+            threshold=0.65,
             origin=origin,
         )
         logger.info(
@@ -942,40 +958,57 @@ def open_teqingchu():
         break
 
 def read_info() -> Optional[list[bool]]:
-    """读取是每个特勤处是否正在制造"""
+    """读取每个特勤处是否正在制造
+    返回:
+        [技术中心, 工作台, 制药台, 防具台]
+        True  -> 正在制造
+        False -> 未在制造（未开始 / 已完成领取后）
+    """
     pid = check_start()
     activate_delta_force_client(pid)
-    
+
     TEMPLATE_TECHNOLOGYCENTER = load_template("technologycenter.png")
     TEMPLATE_WORKBENCH = load_template("workbench.png")
     TEMPLATE_PHARMACEUTICALPLATFORM = load_template("pharmaceuticalplatform.png")
     TEMPLATE_ARMORPLATFORM = load_template("armorplatform.png")
+
     TEMPLATE_MAKING = load_template("making.png")
     TEMPLATE_STOP = load_template("stop.png")
     TEMPLATE_NOTFOUND = load_template("notfound.png")
     TEMPLATE_GO_MAKE = load_template("go_make.png")
-    
-    def open_and_check(sleep_time: float = .5) -> Optional[bool]:
-        """打开制造界面并检查是否正在制造"""
+    TEMPLATE_GETDONE = load_template("getdone.png")
+
+    def open_and_check(sleep_time: float = 0.5) -> Optional[bool]:
+        """打开制造界面并检查当前状态"""
+
+        # 先进入制造界面
         while True:
             screen, region, hwnd = capture.window_by_pid(pid)
             if screen is None or region is None:
                 logger.error("无法截取 三角洲行动 窗口，可能窗口未完全加载或被遮挡")
                 return None
+
             origin = (region["left"], region["top"])
+
             making_found, making_score, making_top_left, making_bottom_right = vision.find_template(
                 screen,
                 TEMPLATE_MAKING,
-                threshold=0.8,
+                threshold=0.7,
                 origin=origin,
             )
+
             go_make_found, go_make_score, go_make_top_left, go_make_bottom_right = vision.find_template(
                 screen,
                 TEMPLATE_GO_MAKE,
-                threshold=0.8,
+                threshold=0.7,
                 origin=origin,
             )
-            
+
+            logger.info(
+                f"制造入口检测: making_found={making_found}, making_score={making_score:.4f}, "
+                f"go_make_found={go_make_found}, go_make_score={go_make_score:.4f}"
+            )
+
             if go_make_found and go_make_top_left is not None and go_make_bottom_right is not None:
                 logger.info("检测到未开始制造，准备点击去制造按钮")
                 click_x, click_y = vision.box_center(
@@ -987,8 +1020,9 @@ def read_info() -> Optional[list[bool]]:
                 input.click(click_x, click_y)
                 time.sleep(sleep_time)
                 break
-            
+
             if making_found and making_top_left is not None and making_bottom_right is not None:
+                logger.info("检测到制造按钮，准备点击进入制造界面")
                 click_x, click_y = vision.box_center(
                     making_top_left,
                     making_bottom_right,
@@ -996,70 +1030,144 @@ def read_info() -> Optional[list[bool]]:
                 )
                 logger.info(f"准备点击制造，绝对坐标=({click_x}, {click_y})")
                 input.click(click_x, click_y)
+                time.sleep(sleep_time)
                 break
-            continue
-        
+
+            time.sleep(sleep_time)
+
+        # 等界面稳定
+        time.sleep(1.0)
+
         while True:
             screen, region, hwnd = capture.window_by_pid(pid)
             if screen is None or region is None:
                 logger.error("无法截取 三角洲行动 窗口，可能窗口未完全加载或被遮挡")
                 return None
-            origin = (region["left"], region["top"])
+
+            window_origin = (region["left"], region["top"])
+            h, w = screen.shape[:2]
+
+            # 右下区域：用于 stop / getdone
+            action_x1 = int(w * 0.50)
+            action_y1 = int(h * 0.75)
+            action_roi = screen[action_y1:h, action_x1:w]
+            action_origin = (window_origin[0] + action_x1, window_origin[1] + action_y1)
+
+            # 中间区域：用于 notfound（“请放入生产图纸”）
+            center_x1 = int(w * 0.48)
+            center_y1 = int(h * 0.35)
+            center_x2 = int(w * 0.78)
+            center_y2 = int(h * 0.72)
+            center_roi = screen[center_y1:center_y2, center_x1:center_x2]
+            center_origin = (window_origin[0] + center_x1, window_origin[1] + center_y1)
+
             stop_found, stop_score, stop_top_left, stop_bottom_right = vision.find_template(
-                screen,
+                action_roi,
                 TEMPLATE_STOP,
-                threshold=0.8,
-                origin=origin,
+                threshold=0.72,
+                origin=action_origin,
             )
+
+            getdone_found, getdone_score, getdone_top_left, getdone_bottom_right = vision.find_template(
+                action_roi,
+                TEMPLATE_GETDONE,
+                threshold=0.72,
+                origin=action_origin,
+            )
+
             notfound_found, notfound_score, notfound_top_left, notfound_bottom_right = vision.find_template(
-                screen,
+                center_roi,
                 TEMPLATE_NOTFOUND,
-                threshold=0.8,
-                origin=origin,
+                threshold=0.60,
+                origin=center_origin,
             )
+
             logger.info(
                 f"停止制造检测: found={stop_found}, score={stop_score:.4f}, "
                 f"top_left={stop_top_left}, bottom_right={stop_bottom_right}"
             )
             logger.info(
+                f"完成制造检测: found={getdone_found}, score={getdone_score:.4f}, "
+                f"top_left={getdone_top_left}, bottom_right={getdone_bottom_right}"
+            )
+            logger.info(
                 f"未找到检测: found={notfound_found}, score={notfound_score:.4f}, "
                 f"top_left={notfound_top_left}, bottom_right={notfound_bottom_right}"
             )
+
+            # 优先级：
+            # 1. 收获
+            # 2. 停止
+            # 3. 未放入生产图纸
+            if getdone_found and getdone_top_left is not None and getdone_bottom_right is not None:
+                logger.info("检测到已完成制造，准备点击领取")
+                click_x, click_y = vision.box_center(
+                    getdone_top_left,
+                    getdone_bottom_right,
+                    offset=(0, 0),
+                )
+                logger.info(f"准备点击领取，绝对坐标=({click_x}, {click_y})")
+                input.click(click_x, click_y)
+                time.sleep(2)
+                input.press("space")
+                time.sleep(sleep_time)
+                input.press("esc")
+                time.sleep(sleep_time)
+                input.press("esc")
+                return False
+
             if stop_found and stop_top_left is not None and stop_bottom_right is not None:
                 logger.info("检测到正在制造")
                 time.sleep(sleep_time)
-                input.press("esc") # 退出制造界面
+                input.press("esc")
                 time.sleep(sleep_time)
-                input.press("esc") # 需要退出两次才能回到特勤处主界面
+                input.press("esc")
                 return True
+
             if notfound_found and notfound_top_left is not None and notfound_bottom_right is not None:
-                logger.info("检测到未开始制造")
+                logger.info("检测到未开始制造（请放入生产图纸）")
                 time.sleep(sleep_time)
-                input.press("esc") # 退出制造界面
+                input.press("esc")
                 time.sleep(sleep_time)
-                input.press("esc") # 需要退出两次才能回到特勤处主界面
+                input.press("esc")
                 return False
-            
-    platforms = [TEMPLATE_TECHNOLOGYCENTER, TEMPLATE_WORKBENCH, TEMPLATE_PHARMACEUTICALPLATFORM, TEMPLATE_ARMORPLATFORM]
-    plantform_names = ["技术中心", "工作台", "制药台", "防具台"]
+
+            logger.warning("未检测到 stop/getdone/notfound，继续重试中...")
+            time.sleep(sleep_time)
+
+    platforms = [
+        TEMPLATE_TECHNOLOGYCENTER,
+        TEMPLATE_WORKBENCH,
+        TEMPLATE_PHARMACEUTICALPLATFORM,
+        TEMPLATE_ARMORPLATFORM,
+    ]
+    platform_names = ["技术中心", "工作台", "制药台", "防具台"]
+
     index = 0
-    status = [] # 技术中心，工作台，制药台，防具台
-    
+    status = []
+
     while True:
         screen, region, hwnd = capture.window_by_pid(pid)
         if screen is None or region is None:
             logger.error("无法截取 三角洲行动 窗口，可能窗口未完全加载或被遮挡")
             return None
+
         origin = (region["left"], region["top"])
-        
+
         found, score, top_left, bottom_right = vision.find_template(
             screen,
             platforms[index],
             threshold=0.8,
             origin=origin,
         )
+
+        logger.info(
+            f"平台检测[{platform_names[index]}]: found={found}, score={score:.4f}, "
+            f"top_left={top_left}, bottom_right={bottom_right}"
+        )
+
         if found and top_left is not None and bottom_right is not None:
-            logger.info(f"检测到特勤处-{plantform_names[index]}，点击进入")
+            logger.info(f"检测到特勤处-{platform_names[index]}，点击进入")
             click_x, click_y = vision.box_center(
                 top_left,
                 bottom_right,
@@ -1067,38 +1175,42 @@ def read_info() -> Optional[list[bool]]:
             )
             logger.info(f"点击坐标: ({click_x}, {click_y})")
             input.click(click_x, click_y)
-            time.sleep(.5)
+            time.sleep(0.5)
+
             status.append(open_and_check())
             index += 1
+
             if index >= len(platforms):
                 break
-        continue
+
+        time.sleep(0.3)
+
     return status
 
 def make_object(err: int = 0):
     pid = check_start()
     activate_delta_force_client(pid)
 
-    
     TEMPLATE_COMPLETE = load_template("complete.png")
-    TEMPLATE_BUY = load_template("buy.png")
     TEMPLATE_PRODUCTION = load_template("production.png")
-    
-    def check_production():
-        while True:
-            screen, region, hwnd = capture.window_by_pid(pid)
-            if screen is None or region is None:
-                logger.error("无法截取 三角洲行动 窗口，可能窗口未完全加载或被遮挡")
-                return False
-            origin = (region["left"], region["top"])
-            found, score, top_left, bottom_right = vision.find_template(
-                screen,
-                TEMPLATE_PRODUCTION,
-                threshold=0.8,
-                origin=origin,
-            )
-            if found and top_left is not None and bottom_right is not None:
-                logger.info("检测到材料足够")
+
+    def check_production(click: bool = True) -> bool:
+        screen, region, hwnd = capture.window_by_pid(pid)
+        if screen is None or region is None:
+            logger.error("无法截取 三角洲行动 窗口，可能窗口未完全加载或被遮挡")
+            return False
+
+        origin = (region["left"], region["top"])
+        found, score, top_left, bottom_right = vision.find_template(
+            screen,
+            TEMPLATE_PRODUCTION,
+            threshold=0.8,
+            origin=origin,
+        )
+
+        if found and top_left is not None and bottom_right is not None:
+            logger.info("检测到材料足够")
+            if click:
                 click_x, click_y = vision.box_center(
                     top_left,
                     bottom_right,
@@ -1106,64 +1218,76 @@ def make_object(err: int = 0):
                 )
                 logger.info(f"准备点击生产按钮，绝对坐标=({click_x}, {click_y})")
                 input.click(click_x, click_y)
-                return True
-            else:
-                logger.info("未检测到材料足够，准备补齐")
-                return False
-    
-    if not check_production():
-        while True:
-            screen, region, hwnd = capture.window_by_pid(pid)
-            if screen is None or region is None:
-                logger.error("无法截取 三角洲行动 窗口，可能窗口未完全加载或被遮挡")
-                return False
-            origin = (region["left"], region["top"])
-            complete_found, complete_score, complete_top_left, complete_bottom_right = vision.find_template(
-                screen,
-                TEMPLATE_COMPLETE,
-                threshold=0.8,
-                origin=origin,
-            )
-            if complete_found and complete_top_left is not None and complete_bottom_right is not None:
-                click_x, click_y = vision.box_center(
-                    complete_top_left,
-                    complete_bottom_right,
-                    offset=(0, 0),
-                )
-                logger.info(f"准备点击制造，绝对坐标=({click_x}, {click_y})")
-                input.click(click_x, click_y)
-                break
-            continue
-        time.sleep(0.5)
-        while True:
-            screen, region, hwnd = capture.window_by_pid(pid)
-            if screen is None or region is None:
-                logger.error("无法截取 三角洲行动 窗口，可能窗口未完全加载或被遮挡")
-                return False
-            origin = (region["left"], region["top"])
-            buy_found, buy_score, buy_top_left, buy_bottom_right = vision.find_template(
-                screen,
-                TEMPLATE_BUY,
-                threshold=0.8,
-                origin=origin,
-            )
-            if buy_found and buy_top_left is not None and buy_bottom_right is not None:
-                click_x, click_y = vision.box_center(
-                    buy_top_left,
-                    buy_bottom_right,
-                    offset=(0, 0),
-                )
-                logger.info(f"准备点击制造，绝对坐标=({click_x}, {click_y})")
-                input.click(click_x, click_y)
-                break
-            continue
-        time.sleep(1)
-        if not check_production() and err < 3:
-            return make_object(err + 1)
-        if err >= 3:
-            logger.error("补齐后仍未检测到材料足够，可能出现异常，停止尝试")
+            return True
+
+        logger.info("未检测到材料足够，准备补齐")
+        return False
+
+    # 已经能生产就直接点生产
+    if check_production(click=True):
+        return True
+
+    # 先点“补齐”
+    while True:
+        screen, region, hwnd = capture.window_by_pid(pid)
+        if screen is None or region is None:
+            logger.error("无法截取 三角洲行动 窗口，可能窗口未完全加载或被遮挡")
             return False
-    return True
+
+        origin = (region["left"], region["top"])
+        complete_found, complete_score, complete_top_left, complete_bottom_right = vision.find_template(
+            screen,
+            TEMPLATE_COMPLETE,
+            threshold=0.8,
+            origin=origin,
+        )
+
+        if complete_found and complete_top_left is not None and complete_bottom_right is not None:
+            click_x, click_y = vision.box_center(
+                complete_top_left,
+                complete_bottom_right,
+                offset=(0, 0),
+            )
+            logger.info(f"准备点击补齐按钮，绝对坐标=({click_x}, {click_y})")
+            input.click(click_x, click_y)
+            break
+
+        time.sleep(0.3)
+
+    time.sleep(0.8)
+
+    # 直接写死点击补齐确认按钮（窗口内相对坐标）
+    # 你提供的最终坐标：x=963, y=749
+    retry_count = 0
+
+    while True:
+        screen, region, hwnd = capture.window_by_pid(pid)
+        if screen is None or region is None:
+            logger.error("无法截取 三角洲行动 窗口，可能窗口未完全加载或被遮挡")
+            return False
+
+        click_x = region["left"] + 963
+        click_y = region["top"] + 749
+
+        logger.info(f"准备点击补齐确认按钮（写死坐标），绝对坐标=({click_x}, {click_y})")
+        input.click(click_x, click_y)
+        time.sleep(1.0)
+
+        # 点击后如果已经能生产，直接点生产并结束
+        if check_production(click=True):
+            return True
+
+        retry_count += 1
+        if retry_count >= 6:
+            logger.warning("写死坐标点击补齐确认按钮多次后，仍未检测到生产按钮")
+            break
+
+    if err < 3:
+        logger.warning("购买后仍未检测到生产按钮，准备重试 make_object")
+        return make_object(err + 1)
+
+    logger.error("补齐后仍未检测到材料足够，可能出现异常，停止尝试")
+    return False
 
 def find_object(obj_img: np.ndarray, retry_interval: float = 0.5) -> Optional[tuple[int, int]]:
     pid = check_start()
@@ -1258,6 +1382,7 @@ def open_object(index: int):
     object_index = ["technologycenter", "workbench", "pharmaceuticalplatform", "armorplatform"]
     TEMPLATE = load_template(f"{object_index[index]}.png")
     TEMPLATE_MAKING = load_template("making.png")
+    TEMPLATE_GO_MAKE = load_template("go_make.png")
     
     while True:
         screen, region, hwnd = capture.window_by_pid(pid)
@@ -1301,12 +1426,32 @@ def open_object(index: int):
             threshold=0.8,
             origin=origin,
         )
+        go_make_found, go_make_score, go_make_top_left, go_make_bottom_right = vision.find_template(
+            screen,
+            TEMPLATE_GO_MAKE,
+            threshold=0.8,
+            origin=origin,
+        )
     
         logger.info(
             f"制造界面检测: found={making_found}, score={making_score:.4f}, "
             f"top_left={making_top_left}, bottom_right={making_bottom_right}"
         )
+        logger.info(
+            f"去制造界面检测: found={go_make_found}, score={go_make_score:.4f}, "
+            f"top_left={go_make_top_left}, bottom_right={go_make_bottom_right}"
+        )
         
+        if go_make_found and go_make_top_left is not None and go_make_bottom_right is not None:
+            logger.info("检测到去制造界面，准备点击")
+            click_x, click_y = vision.box_center(
+                go_make_top_left,
+                go_make_bottom_right,
+                offset=(0, 0),
+            )
+            logger.info(f"准备点击去制造，绝对坐标=({click_x}, {click_y})")
+            input.click(click_x, click_y)
+            break
         if making_found and making_top_left is not None and making_bottom_right is not None:
             logger.info("检测到制造界面，准备点击")
             click_x, click_y = vision.box_center(
