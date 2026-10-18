@@ -494,7 +494,11 @@ def login_account(usr_id: str, retry_interval: float = 0.5) -> bool:
 
             time.sleep(1.0)
             continue
-    
+    screen, region, hwnd = capture.window_by_pid(delta_force_pid)
+    if screen is None or region is None:
+        logger.error("无法截取 三角洲行动 登录窗口")
+        return False
+    origin = (region["left"], region["top"])
     input.click(origin[0] + 10, origin[1] + 10) # 点击窗口内任意位置以确保窗口获得焦点
     time.sleep(0.5)
     input.hotkey("tab")
@@ -606,7 +610,7 @@ def quit_account() -> bool:
     retry_count = 0
     max_retry = 20
     
-    while True:
+    for _ in range(max_retry):
         screen, region, hwnd = capture.window_by_pid(delta_force_pid)
         if screen is None or region is None:
             logger.error("无法截取 三角洲行动 窗口，可能窗口未完全加载或被遮挡")
@@ -638,6 +642,9 @@ def quit_account() -> bool:
         time.sleep(0.5)
         input.click(click_x, click_y)
         break
+    else:
+        logger.error("多次重试未找到用户信息区域，停止退出账户流程")
+        return False
     
     while True:
         screen, region, hwnd = capture.window_by_pid(delta_force_pid)
@@ -663,8 +670,8 @@ def quit_account() -> bool:
             time.sleep(0.5)
             retry_count += 1
             if retry_count >= max_retry:
-                logger.error("多次重试未找到退出按钮，重新执行logout_account流程")
-                return quit_account()
+                logger.error("多次重试未找到退出按钮，停止退出账户流程")
+                return False
             continue
         click_x, click_y = vision.box_center(
             top_left,
@@ -681,6 +688,7 @@ def quit_account() -> bool:
     screen, region, hwnd = capture.window_by_pid(delta_force_pid)
     if screen is None or region is None:
         logger.error("无法截取 三角洲行动 窗口，可能窗口未完全加载或被遮挡")
+        return False
     origin = (region["left"], region["top"])
     found, score, top_left, bottom_right = vision.find_template_edge(
         screen,
@@ -696,8 +704,8 @@ def quit_account() -> bool:
         f"top_left={top_left}, bottom_right={bottom_right}"
     )
     if not found or top_left is None or bottom_right is None:
-        logger.warning("未检测到退出确认按钮，重试中...")
-        time.sleep(0.5)
+        logger.error("未检测到退出确认按钮，停止退出账户流程")
+        return False
     click_x, click_y = vision.box_center(
         top_left,
         bottom_right,
@@ -707,6 +715,7 @@ def quit_account() -> bool:
     time.sleep(0.5)
     input.click(click_x, click_y)
     logger.info("已点击退出确认按钮")
+    return True
 
 def open_game() -> bool:
     """
@@ -719,61 +728,58 @@ def open_game() -> bool:
     TEMPLATE_SHOUQUAN = load_template("shouquan.png")
     
     while True:
-        screen, region, hwnd = capture.window_by_pid(delta_force_pid)
-        if screen is None or region is None:
-            logger.error("无法截取 三角洲行动 窗口，可能窗口未完全加载或被遮挡")
-            continue
-        origin = (region["left"], region["top"])
-        found, score, top_left, bottom_right = vision.find_template(
-            screen,
-            TEMPLATE_START_GAME,
-            threshold=0.8,
-            origin=origin,
-        )
-        logger.info(
-            f"开始游戏按钮检测: found={found}, score={score:.4f}, "
-            f"top_left={top_left}, bottom_right={bottom_right}"
-        )
-        if not found or top_left is None or bottom_right is None:
-            logger.warning("未检测到 开始游戏 按钮，重试中...")
-            time.sleep(0.5)
-            continue
-        click_x, click_y = vision.box_center(
-            top_left,
-            bottom_right,
-            offset=(0, 0),
-        )
-        logger.info(f"准备点击 开始游戏 按钮，绝对坐标=({click_x}, {click_y})")
-        time.sleep(0.5)
-        input.click(click_x, click_y)
-        logger.info("已点击 开始游戏 按钮")
-        break
-    
-    time.sleep(2)
-    retry_count = 0
-    while retry_count < 10:
-        retry_count += 1
-        screen, region, hwnd = capture.window_by_pid(delta_force_pid)
-        if screen is None or region is None:
-            logger.error("无法截取 三角洲行动 窗口，可能窗口未完全加载或被遮挡")
-            continue
-        origin = (region["left"], region["top"])
-        found, score, top_left, bottom_right = vision.find_template(
-            screen,
-            TEMPLATE_SHOUQUAN,
-            threshold=0.8,
-            origin=origin,
-        )
-        logger.info(
-            f"授权界面检测: found={found}, score={score:.4f}, "
-            f"top_left={top_left}, bottom_right={bottom_right}"
-        )
-        if found and top_left is not None and bottom_right is not None:
-            input.click(
-                vision.box_center(top_left, bottom_right, offset=(0, 0))
+        while True:
+            screen, region, hwnd = capture.window_by_pid(delta_force_pid)
+            if screen is None or region is None:
+                logger.error("无法截取 三角洲行动 窗口，可能窗口未完全加载或被遮挡")
+                continue
+            origin = (region["left"], region["top"])
+            found, score, top_left, bottom_right = vision.find_template(
+                screen,
+                TEMPLATE_START_GAME,
+                threshold=0.8,
+                origin=origin,
             )
-            logger.info("检测到授权界面，已点击授权按钮")
+            logger.info(
+                f"开始游戏按钮检测: found={found}, score={score:.4f}, "
+                f"top_left={top_left}, bottom_right={bottom_right}"
+            )
+            if not found or top_left is None or bottom_right is None:
+                logger.warning("未检测到 开始游戏 按钮，重试中...")
+                time.sleep(0.5)
+                continue
+            click_x, click_y = vision.box_center(top_left, bottom_right)
+            logger.info(f"准备点击 开始游戏 按钮，绝对坐标=({click_x}, {click_y})")
+            time.sleep(0.5)
+            input.click(click_x, click_y)
+            logger.info("已点击 开始游戏 按钮")
             break
+
+        time.sleep(2)
+        for _ in range(10):
+            screen, region, hwnd = capture.window_by_pid(delta_force_pid)
+            if screen is None or region is None:
+                time.sleep(0.5)
+                continue
+            origin = (region["left"], region["top"])
+            found, score, top_left, bottom_right = vision.find_template(
+                screen,
+                TEMPLATE_SHOUQUAN,
+                threshold=0.8,
+                origin=origin,
+            )
+            logger.info(
+                f"授权界面检测: found={found}, score={score:.4f}, "
+                f"top_left={top_left}, bottom_right={bottom_right}"
+            )
+            if found and top_left is not None and bottom_right is not None:
+                input.click(*vision.box_center(top_left, bottom_right))
+                logger.info("检测到授权界面，已点击授权按钮，准备重新开始游戏")
+                time.sleep(1)
+                break
+            time.sleep(0.5)
+        else:
+            return True
         
 
 def check_start() -> Optional[int]:
@@ -800,13 +806,14 @@ def check_start() -> Optional[int]:
         break
     return game_client_pid
 
-def start_game():
+def start_game() -> bool:
     """打开游戏到主页面"""
     pid = check_start()
     activate_delta_force_client(pid)
     
     TEMPLATE_FENGHUO1 = load_template("fenghuo1.png")
     TEMPLATE_FENGHUO2 = load_template("fenghuo2.png")
+    TEMPLATE_FENGHUO_HOVERED = load_template("fenghuo_hovered.png")
     TEMPLATE_JOIN_GAME = load_template("join_game.png")
     TEMPLATE_CONTINUE = load_template("continue.png")
     TEMPLATE_TAB_CONTINUE = load_template("tab_continue.png")
@@ -829,6 +836,12 @@ def start_game():
             TEMPLATE_FENGHUO2,
             threshold=0.75,
             origin=origin
+        )
+        hovered_found, hovered_score, hovered_top_left, hovered_bottom_right = vision.find_template(
+            screen,
+            TEMPLATE_FENGHUO_HOVERED,
+            threshold=0.8,
+            origin=origin,
         )
         
         logger.info(
@@ -857,6 +870,11 @@ def start_game():
             time.sleep(0.5)
             input.click(click_x, click_y)
             break
+        if hovered_found:
+            logger.info(f"检测到高亮烽火卡片，score={hovered_score:.4f}，准备点击")
+            input.click(*vision.box_center(hovered_top_left, hovered_bottom_right))
+            break
+        time.sleep(0.5)
     time.sleep(2)
     while True:
         screen, region, hwnd = capture.window_by_pid(pid)
@@ -926,8 +944,10 @@ def start_game():
             time.sleep(1)
             input.hotkey("tab")
             break
+        time.sleep(0.5)
+    return True
         
-def open_teqingchu():
+def open_teqingchu() -> bool:
     """打开特勤处"""
     pid = check_start()
     activate_delta_force_client(pid)
@@ -956,8 +976,9 @@ def open_teqingchu():
             input.press("e")
             continue
         break
+    return True
 
-def read_info() -> Optional[list[bool]]:
+def read_info(skipped: frozenset[int] = frozenset()) -> Optional[list[bool]]:
     """读取每个特勤处是否正在制造
     返回:
         [技术中心, 工作台, 制药台, 防具台]
@@ -1147,6 +1168,14 @@ def read_info() -> Optional[list[bool]]:
     status = []
 
     while True:
+        if index in skipped:
+            logger.info(f"跳过平台状态读取: {platform_names[index]}")
+            status.append(True)
+            index += 1
+            if index >= len(platforms):
+                break
+            continue
+
         screen, region, hwnd = capture.window_by_pid(pid)
         if screen is None or region is None:
             logger.error("无法截取 三角洲行动 窗口，可能窗口未完全加载或被遮挡")
@@ -1177,7 +1206,10 @@ def read_info() -> Optional[list[bool]]:
             input.click(click_x, click_y)
             time.sleep(0.5)
 
-            status.append(open_and_check())
+            result = open_and_check()
+            if result is None:
+                return None
+            status.append(result)
             index += 1
 
             if index >= len(platforms):
@@ -1339,8 +1371,10 @@ def find_object(obj_img: np.ndarray, retry_interval: float = 0.5) -> Optional[tu
             )
             input.move_to(click_x, click_y)
             input.scroll(5) # 物品栏向上滚动，尝试显示需要的物品
+            time.sleep(retry_interval)
             continue
         input.scroll(5) # 物品栏向上滚动，尝试显示需要的物品
+        time.sleep(retry_interval)
     time.sleep(0.5)
     
     while True:
@@ -1410,7 +1444,7 @@ def open_object(index: int):
             )
             input.click(click_x, click_y)
             break
-        continue
+        time.sleep(0.3)
     
     time.sleep(0.5)
     
@@ -1462,18 +1496,19 @@ def open_object(index: int):
             logger.info(f"准备点击制造，绝对坐标=({click_x}, {click_y})")
             input.click(click_x, click_y)
             break
-        continue
+        time.sleep(0.3)
     return True
 
-def quit_object():
+def quit_object() -> bool:
     pid = check_start()
     activate_delta_force_client(pid)
     
     input.press("esc") # 退出制造界面
     time.sleep(0.1)
     input.press("esc") # 需要退出两次才能回到特勤处主界面
+    return True
     
-def quit_game():
+def quit_game() -> bool:
     pid = check_start()
     activate_delta_force_client(pid)
     
@@ -1533,4 +1568,5 @@ def quit_game():
             logger.info(f"准备点击确认退出按钮，绝对坐标=({click_x}, {click_y})")
             input.click(click_x, click_y)
             break
-        continue
+        time.sleep(0.3)
+    return True

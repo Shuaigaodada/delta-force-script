@@ -4,7 +4,8 @@ from mss import mss
 from typing import Optional
 import pygetwindow as gw
 import win32gui
-import win32process
+
+from src.core import processes
 
 
 def fullscreen(monitor_index: int = 1) -> tuple[np.ndarray, dict]:
@@ -69,34 +70,9 @@ def window_by_title(title_keyword: str) -> tuple[Optional[np.ndarray], Optional[
     img, region = window(win)
     return img, region, win
 
-def _find_hwnds_by_pid(pid: int) -> list[int]:
-    """
-    根据 pid 查找该进程对应的可见窗口句柄列表
-    """
-    hwnds: list[int] = []
-
-    def callback(hwnd, _):
-        if not win32gui.IsWindowVisible(hwnd):
-            return
-
-        try:
-            _, window_pid = win32process.GetWindowThreadProcessId(hwnd)
-            if window_pid == pid:
-                hwnds.append(hwnd)
-        except Exception:
-            pass
-
-    win32gui.EnumWindows(callback, None)
-    return hwnds
-
 def window_by_pid(pid: int) -> tuple[Optional[np.ndarray], Optional[dict], Optional[int]]:
-    """
-    根据 pid 截取该进程的窗口
-
-    返回:
-        img, region, hwnd
-    """
-    hwnds = _find_hwnds_by_pid(pid)
+    """根据进程 ID 截取可见窗口。"""
+    hwnds = processes.find_hwnds_by_pid(pid)
     if not hwnds:
         return None, None, None
 

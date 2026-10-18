@@ -101,17 +101,20 @@ def find_hwnds_by_pid(pid: int) -> list[int]:
     hwnds: list[int] = []
 
     def callback(hwnd, _):
-        if not win32gui.IsWindowVisible(hwnd):
-            return
-
         try:
+            if not win32gui.IsWindowVisible(hwnd):
+                return True
             _, window_pid = win32process.GetWindowThreadProcessId(hwnd)
             if window_pid == pid:
                 hwnds.append(hwnd)
         except Exception:
             pass
+        return True
 
-    win32gui.EnumWindows(callback, None)
+    try:
+        win32gui.EnumWindows(callback, None)
+    except Exception:
+        return []
     return hwnds
 
 

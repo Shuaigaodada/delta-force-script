@@ -16,6 +16,8 @@ def _app_root() -> Path:
 
 APP_ROOT = _app_root()
 LIBS_DIR = APP_ROOT / "libs"
+if not LIBS_DIR.is_dir():
+    LIBS_DIR = APP_ROOT / "llibs"  # Existing OCR distribution directory.
 TESSERACT_DIR = LIBS_DIR / "tesseract-ocr"
 TESSERACT_EXE = TESSERACT_DIR / "tesseract.exe"
 TESSDATA_DIR = TESSERACT_DIR / "tessdata"
@@ -60,13 +62,17 @@ def find_template(
     - 如果 screen 是整屏截图，origin 用默认 (0, 0)
     - 如果 screen 是窗口截图，origin 传窗口左上角屏幕坐标
     """
+    sh, sw = screen.shape[:2]
+    th, tw = template.shape[:2]
+    if tw > sw or th > sh:
+        return False, -1.0, None, None
+
     result = cv2.matchTemplate(screen, template, cv2.TM_CCOEFF_NORMED)
     _, max_val, _, max_loc = cv2.minMaxLoc(result)
 
     if max_val >= threshold:
-        h, w = template.shape[:2]
         top_left = (max_loc[0] + origin[0], max_loc[1] + origin[1])
-        bottom_right = (top_left[0] + w, top_left[1] + h)
+        bottom_right = (top_left[0] + tw, top_left[1] + th)
         return True, float(max_val), top_left, bottom_right
 
     return False, float(max_val), None, None

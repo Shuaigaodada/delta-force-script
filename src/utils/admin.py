@@ -1,5 +1,6 @@
 import sys
 import ctypes
+import os
 import pathlib
 from src.utils.loggers import logger
 
@@ -80,9 +81,14 @@ def ensure_admin_or_relaunch_launcher(launcher_path: str | None = None) -> bool:
     if is_admin():
         return True
 
+    if os.environ.get("DELTA_FORCE_ELEVATION_ATTEMPTED") == "1":
+        logger.error("已尝试提权，但新进程仍没有管理员权限，停止重复启动")
+        return False
+
     logger.info("当前不是管理员权限，正在尝试以管理员权限重新启动 launcher ...")
 
     try:
+        os.environ["DELTA_FORCE_ELEVATION_ATTEMPTED"] = "1"
         ret = relaunch_launcher_as_admin(launcher_path)
     except Exception as e:
         logger.error("重新启动 launcher 失败：%s", e)

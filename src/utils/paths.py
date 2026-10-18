@@ -9,8 +9,10 @@ def app_root() -> Path:
 
 ROOT_DIR = app_root()
 DATA_DIR = ROOT_DIR / "data"
-CUSTOM_DIR = DATA_DIR / "custom"
+CUSTOM_DIR = DATA_DIR / "templates" / "delta_force" / "custom"
 LIBS_DIR = ROOT_DIR / "libs"
+if not LIBS_DIR.is_dir():
+    LIBS_DIR = ROOT_DIR / "llibs"  # Existing OCR distribution directory.
 
 def data_path(*parts: str) -> Path:
     return DATA_DIR.joinpath(*parts)
